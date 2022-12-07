@@ -17,10 +17,11 @@ def get_all_items():
     RETURN n.title as title,
                     n.node_id as node_id,
                     n.author as author,
-                    n.date_acquired as date_acquired,
+                    toString(n.date_acquired) as date_acquired,
                     n.replacement_cost as replacement_cost,
                     n.fine_rate as fine_rate,
                     n.yr_published as year_published,
+                    n.days_for_loan as dfl,
                     s.type as status,
                     m.type as media,
                     c.type as classification
@@ -34,12 +35,13 @@ def get_all_items():
 def create_item():
     json_data = request.get_json()
     print(json_data)
+    #mock = json_data['mock']
     title = json_data['title']
-    search_title = title.lower()
     author = json_data['author']
     date_acquired = json_data['date_acquired']
     replacement_cost = json_data['replacement_cost']
     fine_rate = json_data['fine_rate']
+    dfl = json_data['dfl']
     yr_published = json_data['yr_published']
     node_id = uuid.uuid4()
     status = json_data['status']
@@ -54,9 +56,11 @@ def create_item():
                     search_title:$search_title,
                     node_id:$node_id,
                     author:$author,
-                    date_acquired:$date_acquired,
+                    search_author:$search_author,
+                    date_acquired:$date($date_acquired),
                     replacement_cost:$replacement_cost,
                     fine_rate:$fine_rate,
+                    days_for_loan:$dfl,
                     yr_published:$yr_published}) 
     MERGE (s:Status {type:$status}) 
         ON CREATE SET s.status_id = $status_id 
@@ -68,12 +72,14 @@ def create_item():
     """
 
     map = {"title": title,
-           "search_title": search_title,
+           "search_title": title.lower(),
            "node_id": str(node_id),
            "author": author,
+           "search_author": author.lower(),
            "date_acquired": date_acquired,
            "replacement_cost": replacement_cost,
            "fine_rate": fine_rate,
+           "dfl": dfl,
            "yr_published": yr_published,
            "status": status,
            "status_id": str(status_id),
@@ -98,10 +104,11 @@ def get_item_detail(node_id):
     RETURN n.title as title,
                     n.node_id as node_id,
                     n.author as author,
-                    n.date_acquired as date_acquired,
+                    toString(n.date_acquired) as date_acquired,
                     n.replacement_cost as replacement_cost,
                     n.fine_rate as fine_rate,
                     n.yr_published as year_published,
+                    n.days_for_loan as dfl,
                     s.type as status,
                     m.type as media,
                     c.type as classification
@@ -135,10 +142,12 @@ def update_item():
     json_data = request.get_json()
     print(json_data)
     title = json_data['title']
+    #mock = json_data['mock']
     author = json_data['author']
     date_acquired = json_data['date_acquired']
     replacement_cost = json_data['replacement_cost']
     fine_rate = json_data['fine_rate']
+    dfl = json_data['dfl']
     yr_published = json_data['yr_published']
     node_id = json_data['node_id']
     status = json_data['status']
@@ -153,8 +162,10 @@ def update_item():
     SET n.title = $title,
         n.search_title = $search_title, 
         n.author = $author,
-        n.date_acquired = $date_acquired,
+        n.search_author = $search_author,
+        n.date_acquired = date($date_acquired),
         n.replacement_cost = $replacement_cost,
+        n.days_for_loan = $dfl,
         n.fine_rate = $fine_rate,
         n.yr_published = $yr_published
     WITH n
@@ -171,9 +182,11 @@ def update_item():
     map = {"title": title,
            "search_title": title.lower(),
            "author": author,
+           "search_author": author.lower(),
            "date_acquired": date_acquired,
            "replacement_cost": replacement_cost,
            "fine_rate": fine_rate,
+           "dfl": dfl,
            "yr_published": yr_published,
            "node_id": node_id,
            "status": status,
@@ -238,9 +251,9 @@ def get_filtered_items():
     status_data = ''
 
     if title != '':
-        terms.append(f'n.title = "{title}" ')
+        terms.append(f'n.search_title = "{title}" ')
     if author != '':
-        terms.append(f'n.author = "{author}" ')
+        terms.append(f'n.search_author = "{author}" ')
     if yr_published != '':
         terms.append(f'n.yr_published = "{yr_published}"')
     if status != 'Select Status':
@@ -262,7 +275,7 @@ def get_filtered_items():
         RETURN n.title as title,
                         n.node_id as node_id,
                         n.author as author,
-                        n.date_acquired as date_acquired,
+                        toString(n.date_acquired) as date_acquired,
                         n.replacement_cost as replacement_cost,
                         n.fine_rate as fine_rate,
                         n.yr_published as year_published,
@@ -279,3 +292,58 @@ def get_filtered_items():
     print(data)
     return jsonify(data)
 
+
+@app.route("/getonloanto/<string:node_id>", methods=["GET"])
+def get_on_loan_to(node_id):
+    query1 = """
+    MATCH (i: Item{node_id:$node_id})-[:STAMPED_AS]->(s:Status{type:"On Loan"})
+    WITH i 
+    MATCH (i)<-[r:BORROWED]-(n:User)
+    WHERE r.status = "active"
+    WITH n,r
+    RETURN n.f_name as f_name,
+                    n.l_name as l_name,
+                    n.user_id as user_id,
+                    n.email as email,
+                    n.address as address,
+                    n.dob as dob,
+                    n.tel as tel,
+                    toString(r.date_borrowed) as date_borrowed,
+                    toString(r.date_due) as due_date
+    """
+    map = {"node_id": node_id}
+
+    results = session.run(query1, map)
+    data = results.data()
+    print(data)
+    return jsonify(data)
+
+
+@app.route("/checkborrowed", methods=["GET"])
+def check_borrowed_items():
+    query1 = """
+    MATCH (i:Item)-[:STAMPED_AS]->(s:Status{type:"On Loan"})
+    WITH i 
+    MATCH (i)<-[r:BORROWED]-(n:User)
+    WHERE r.status = "active"
+    WITH n,r
+    RETURN n.f_name as f_name,
+                    n.l_name as l_name,
+                    n.user_id as user_id,
+                    n.email as email,
+                    r.date_borrowed as date_borrowed,
+                    r.date_due as due_date,
+                    n.title as title,
+                    n.node_id as node_id,
+                    n.author as author,
+                    toString(n.date_acquired) as date_acquired,
+                    n.replacement_cost as replacement_cost,
+                    n.fine_rate as fine_rate,
+                    n.yr_published as year_published,
+                    s.type as status,
+                        
+    """
+
+    results = session.run(query1, map)
+    data = results.data()
+    return jsonify(data)
