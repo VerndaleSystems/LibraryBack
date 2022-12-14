@@ -1,3 +1,5 @@
+import datetime
+from datetime import datetime
 from application import app
 from flask import request, jsonify
 import uuid
@@ -42,6 +44,8 @@ def create_item():
     replacement_cost = json_data['replacement_cost']
     fine_rate = json_data['fine_rate']
     dfl = json_data['dfl']
+    if dfl == '':
+        dfl = 30
     yr_published = json_data['yr_published']
     node_id = uuid.uuid4()
     status = json_data['status']
@@ -309,7 +313,9 @@ def get_on_loan_to(node_id):
                     n.dob as dob,
                     n.tel as tel,
                     toString(r.date_borrowed) as date_borrowed,
-                    toString(r.date_due) as due_date
+                    toString(r.date_due) as due_date,
+                    r.overdue as overdue,
+                    r.days_overdue as days_overdue
     """
     map = {"node_id": node_id}
 
@@ -322,27 +328,120 @@ def get_on_loan_to(node_id):
 @app.route("/checkborrowed", methods=["GET"])
 def check_borrowed_items():
     query1 = """
-    MATCH (i:Item)-[:STAMPED_AS]->(s:Status{type:"On Loan"})
-    WITH i 
-    MATCH (i)<-[r:BORROWED]-(n:User)
+    MATCH (i:Item)<-[r:BORROWED]-(n:User)
     WHERE r.status = "active"
-    WITH n,r
     RETURN n.f_name as f_name,
                     n.l_name as l_name,
                     n.user_id as user_id,
                     n.email as email,
-                    r.date_borrowed as date_borrowed,
-                    r.date_due as due_date,
-                    n.title as title,
-                    n.node_id as node_id,
-                    n.author as author,
-                    toString(n.date_acquired) as date_acquired,
-                    n.replacement_cost as replacement_cost,
-                    n.fine_rate as fine_rate,
-                    n.yr_published as year_published,
-                    s.type as status,
+                    toString(r.date_borrowed) as date_borrowed,
+                    toString(r.date_due) as due_date,
+                    r.rel_id as borrowed_id,
+                    r.overdue as overdue,
+                    i.title as title,
+                    i.node_id as node_id,
+                    i.author as author,
+                    toString(i.date_acquired) as date_acquired,
+                    i.replacement_cost as replacement_cost,
+                    i.fine_rate as fine_rate,
+                    i.yr_published as year_published
                         
     """
+
+    results = session.run(query1)
+    data = results.data()
+    return jsonify(data)
+
+
+@app.route("/overdueitem", methods=["POST"])
+def overdue_item():
+    json_data = request.get_json()
+    print(json_data)
+    node_id = json_data['node_id']
+    #user_id = json_data['user_id']
+    borrowed_id = json_data['borrowed_id']
+    days_overdue = json_data['days_overdue']
+    overdue = True
+
+    query1 = """
+     MATCH (u)-[r:BORROWED]->(i)
+     WHERE r.rel_id = $borrowed_id
+     SET r.overdue = $overdue, r.days_overdue = $days_overdue
+     RETURN r.rel_id as borrowed_id,
+            r.overdue as overdue,
+            r.days_overdue as days_overdue
+    """
+    map = {"borrowed_id": borrowed_id,
+           "overdue": overdue,
+           "days_overdue": days_overdue
+           }
+    try:
+        session.run(query1, map)
+        return (f"Item {node_id} set to overdue with borrowed_id: {borrowed_id} by {days_overdue} days ")
+    except Exception as e:
+        return (str(e))
+
+
+
+@app.route("/issueoverduefine", methods=["POST"])
+def issue_overdue_fine():
+    #for json data - need user id (and item id?)
+    json_data = request.get_json()
+    print(json_data)
+    node_id = json_data['node_id']
+    user_id = json_data['user_id']
+    fine_rate = json_data['fine_rate']
+    reason = json_data['reason']
+    fine_id = uuid.uuid4()
+    date_issued = datetime.now()
+    fine_status = "active"
+    issued_to_id = uuid.uuid4()
+    issued_for_id = uuid.uuid4()
+
+    query1 = """
+     MATCH (i: Item{node_id:$node_id})
+     MATCH (u: User{user_id:$user_id})
+     CREATE (u)<-[r1:ISSUED_TO]-(f:Fine)-[r2:ISSUED_FOR]->(i)
+     SET f.fine_id = $fine_id,
+             f.fine_rate = $fine_rate,
+             f.reason = $reason,
+             f.date_issued = date($date_issued),
+             f.fine_status = $fine_status,
+             r1.issued_to_id = $issued_to_id,
+             r2.issued_for_id = $issued_for_id
+    """
+    map = {"node_id": node_id,
+           "user_id": user_id,
+           "fine_rate": fine_rate,
+           "reason": reason,
+           "fine_id": str(fine_id),
+           "date_issued": date_issued,
+           "fine_status": fine_status,
+           "issued_to_id": str(issued_to_id),
+           "issued_for_id": str(issued_for_id)
+           }
+    try:
+        session.run(query1, map)
+        return f"fine issued for user id: {user_id} for {reason}, amount:{fine_rate} per day, fine status is: {fine_status}"
+    except Exception as e:
+        print(str(e))
+        return str(e)
+
+
+@app.route("/getfineid/<string:node_id><string:user_id>", methods=["GET"])
+def get_fine_id(node_id, user_id):
+    query1 = """
+     MATCH (u: User{user_id:$user_id})<-[r1:ISSUED_TO]-(f:Fine)-[r2:ISSUED_FOR]->(i: Item{node_id:$node_id})
+        WHERE f.fine_status = "active"
+        RETURN f.fine_id as fine_id,
+            f.reason as reason,
+            f.fine_status as status
+        """
+
+    map = {
+        "node_id": node_id,
+        "user_id": user_id
+    }
 
     results = session.run(query1, map)
     data = results.data()

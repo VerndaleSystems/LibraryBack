@@ -158,19 +158,22 @@ def update_user():
 
 @app.route("/borrowitem", methods=["POST"])
 def borrow_item():
+    print('BORROW CALLED *******')
     json_data = request.get_json()
     print(json_data)
     user_id = json_data['user_id']
     node_id = json_data['node_id']
     if json_data['dfl'] != '':
-        days_for_loan = json_data['dfl']
+        days_for_loan = int(json_data['dfl'])
     else:
         days_for_loan = 30
     rel_id = uuid.uuid4()
-    get_date = datetime.now()
-    date_borrowed = get_date.strftime("%d,%m,%Y")
-    get_due_date = datetime.now() + timedelta(days=days_for_loan)
-    date_due = get_due_date.strftime("%d,%m,%Y")
+    date_borrowed = datetime.now()
+    #date_borrowed = get_date.strftime("%d,%m,%Y")
+    date_due = datetime.now() + timedelta(days=days_for_loan)
+    #date_due = get_due_date.strftime("%d,%m,%Y")
+    overdue = False
+    days_overdue = 0
 
     query = """
     MATCH (n:Item{node_id:$node_id})-[:STAMPED_AS]-(s)
@@ -180,7 +183,7 @@ def borrow_item():
     query1 = """
     MATCH (u:User{user_id:$user_id})
     MATCH (n:Item{node_id:$node_id})
-    CREATE (u)-[r:BORROWED { rel_id:$rel_id, date_borrowed:$date(date_borrowed), date_due:$date(date_due), status:"active" }]->(n)
+    CREATE (u)-[r:BORROWED { rel_id:$rel_id, date_borrowed:date($date_borrowed), date_due:date($date_due), status:"active", overdue:$overdue }]->(n)
     WITH n
     MATCH (n)-[r1:STAMPED_AS]->() DELETE r1
     MERGE (s:Status {type:"On Loan"}) 
@@ -191,16 +194,22 @@ def borrow_item():
            "rel_id": str(rel_id),
            "date_borrowed": date_borrowed,
            "date_due": date_due,
-           "user_id": user_id
+           "user_id": user_id,
+           "overdue": overdue,
+           "days_overdue": days_overdue
            }
 
     results = session.run(query, map)
     data = results.data()
+    print(data[0]['Status'])
     if data[0]['Status'] == 'Available':
         try:
             session.run(query1, map)
+            print(query1)
             return (f"user Id:{user_id} borrowed item id: {node_id}")
         except Exception as e:
+            print('exception raised')
+            print(str(e))
             return (str(e))
     else:
         return 'Item is unavailable'
@@ -213,15 +222,15 @@ def return_item():
     user_id = json_data['user_id']
     node_id = json_data['node_id']
     rel_id = uuid.uuid4()
-    get_date = datetime.now()
-    date_returned = get_date.strftime("%d,%m,%Y")
+    date_returned = datetime.now()
+    #date_returned = get_date.strftime("%d,%m,%Y")
 
     query1 = """
     MATCH (u:User{user_id:$user_id})
     MATCH (n:Item{node_id:$node_id})
     OPTIONAL MATCH (u)-[r3:BORROWED]-(n)
     SET r3.status = "inactive"
-    CREATE (u)-[r:RETURNED { rel_id:$rel_id, date_returned:$date(date_returned) }]->(n)
+    CREATE (u)-[r:RETURNED { rel_id:$rel_id, date_returned:date($date_returned) }]->(n)
     WITH n
     MATCH (n)-[r1:STAMPED_AS]->() DELETE r1
     MERGE (s:Status {type:"Available"}) 
@@ -237,6 +246,7 @@ def return_item():
         session.run(query1, map)
         return (f"user Id:{user_id} returned item id: {node_id}")
     except Exception as e:
+        print(str(e))
         return (str(e))
 
 
@@ -342,17 +352,15 @@ def check_email(email):
     return jsonify(data)
 
 
-@app.route("/quickfiltermembers", methods=["POST", "OPTIONS"])
-def quick_filtered_members():
-    json_data = request.get_json()
+@app.route("/quickfiltermembers/<string:search_request>", methods=["GET"])
+def quick_filtered_members(search_request):
     print('JSON DATA********')
-    print(json_data)
-    search_request = json_data['search_request'].lower()
+    print(search_request)
 
     query = """
         MATCH (n:User)
         WHERE n.email = $search_request OR n.search_f_name = $search_request 
-            OR n.search_last_name = $search_request, OR n.search_full_name = $search_request OR n.user_id = $search_request
+            OR n.search_last_name = $search_request OR n.search_full_name = $search_request OR n.user_id = $search_request
         RETURN DISTINCT n.f_name as f_name,
                     n.l_name as l_name,
                     n.user_id as user_id,
@@ -363,7 +371,7 @@ def quick_filtered_members():
         """
     print(query)
 
-    map = {"search_request": search_request}
+    map = {"search_request": search_request.lower()}
 
     results = session.run(query, map)
     data = results.data()
