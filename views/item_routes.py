@@ -61,7 +61,7 @@ def create_item():
                     node_id:$node_id,
                     author:$author,
                     search_author:$search_author,
-                    date_acquired:$date($date_acquired),
+                    date_acquired:date($date_acquired),
                     replacement_cost:$replacement_cost,
                     fine_rate:$fine_rate,
                     days_for_loan:$dfl,
@@ -154,8 +154,6 @@ def update_item():
     dfl = json_data['dfl']
     yr_published = json_data['yr_published']
     node_id = json_data['node_id']
-    status = json_data['status']
-    status_id = uuid.uuid4()
     media = json_data['media']
     media_id = uuid.uuid4()
     classed = json_data['classed']
@@ -173,14 +171,12 @@ def update_item():
         n.fine_rate = $fine_rate,
         n.yr_published = $yr_published
     WITH n
-    MATCH (n)-[r1:STAMPED_AS]->(), (n)-[r2:CATEGORIZED_AS]->(), (n)-[r3:CLASSED_AS]->() DELETE r1, r2, r3
-    MERGE (s:Status {type:$status}) 
-        ON CREATE SET s.status_id = $status_id 
+    MATCH (n)-[r2:CATEGORIZED_AS]->(), (n)-[r3:CLASSED_AS]->() DELETE r2, r3
     MERGE (m:Media {type:$media})
         ON CREATE SET m.media_id = $media_id
     MERGE (c:Classification {type:$classed})
         ON CREATE SET c.classed_id = $classed_id
-    CREATE (n)-[:STAMPED_AS]->(s), (n)-[:CATEGORIZED_AS]->(m), (n)-[:CLASSED_AS]->(c)
+    CREATE (n)-[:CATEGORIZED_AS]->(m), (n)-[:CLASSED_AS]->(c)
     """
 
     map = {"title": title,
@@ -193,8 +189,6 @@ def update_item():
            "dfl": dfl,
            "yr_published": yr_published,
            "node_id": node_id,
-           "status": status,
-           "status_id": str(status_id),
            "media": media,
            "media_id": str(media_id),
            "classed": classed,
@@ -218,6 +212,36 @@ def get_all_status():
     results = session.run(query1)
     data = results.data()
     return jsonify(data)
+
+
+@app.route("/updateitemstatus", methods=["POST"])
+def update_item_status():
+    json_data = request.get_json()
+    print(json_data)
+    node_id = json_data['node_id']
+    status = json_data['status']
+    print(status)
+    status_id = uuid.uuid4()
+
+    query1 = """
+    MATCH (n:Item{node_id:$node_id})-[r1:STAMPED_AS]->() DELETE r1
+    MERGE (s:Status {type:$status}) 
+        ON CREATE SET s.status_id = $status_id 
+    CREATE (n)-[:STAMPED_AS]->(s)
+    """
+
+    map = {
+           "node_id": node_id,
+           "status": status,
+           "status_id": str(status_id),
+           }
+    try:
+        session.run(query1, map)
+        return (f"Item node updated with status: {status} and node_id {node_id}")
+    except Exception as e:
+        print(str(e))
+        return (str(e))
+
 
 
 @app.route("/getallmedia", methods=["GET"])
@@ -310,7 +334,7 @@ def get_on_loan_to(node_id):
                     n.user_id as user_id,
                     n.email as email,
                     n.address as address,
-                    n.dob as dob,
+                    toString(n.dob) as dob,
                     n.tel as tel,
                     toString(r.date_borrowed) as date_borrowed,
                     toString(r.date_due) as due_date,
@@ -392,6 +416,7 @@ def issue_overdue_fine():
     user_id = json_data['user_id']
     fine_rate = json_data['fine_rate']
     reason = json_data['reason']
+    item_due_back = json_data['item_due_back']
     fine_id = uuid.uuid4()
     date_issued = datetime.now()
     fine_status = "active"
@@ -407,8 +432,12 @@ def issue_overdue_fine():
              f.reason = $reason,
              f.date_issued = date($date_issued),
              f.fine_status = $fine_status,
+             f.item_due_back = date($item_due_back),
              r1.issued_to_id = $issued_to_id,
              r2.issued_for_id = $issued_for_id
+     RETURN f.fine_status as fine_status,
+            f.reason as reason,
+            f.fine_rate as fine_rate
     """
     map = {"node_id": node_id,
            "user_id": user_id,
@@ -417,6 +446,7 @@ def issue_overdue_fine():
            "fine_id": str(fine_id),
            "date_issued": date_issued,
            "fine_status": fine_status,
+           "item_due_back": item_due_back,
            "issued_to_id": str(issued_to_id),
            "issued_for_id": str(issued_for_id)
            }
@@ -428,11 +458,12 @@ def issue_overdue_fine():
         return str(e)
 
 
-@app.route("/getfineid/<string:node_id><string:user_id>", methods=["GET"])
-def get_fine_id(node_id, user_id):
+
+@app.route("/getfineid/<string:node_id>/<string:user_id>/<string:reason>", methods=["GET"])
+def get_fine_id(node_id, user_id, reason):
     query1 = """
      MATCH (u: User{user_id:$user_id})<-[r1:ISSUED_TO]-(f:Fine)-[r2:ISSUED_FOR]->(i: Item{node_id:$node_id})
-        WHERE f.fine_status = "active"
+        WHERE f.fine_status = "active" AND f.reason = $reason
         RETURN f.fine_id as fine_id,
             f.reason as reason,
             f.fine_status as status
@@ -440,9 +471,42 @@ def get_fine_id(node_id, user_id):
 
     map = {
         "node_id": node_id,
-        "user_id": user_id
+        "user_id": user_id,
+        "reason": reason
     }
+    try:
+        results = session.run(query1, map)
+        data = results.data()
+        return jsonify(data)
+    except Exception as e:
+        print(str(e))
+        return str(e)
 
-    results = session.run(query1, map)
-    data = results.data()
-    return jsonify(data)
+
+@app.route("/updatefinestatus", methods=["POST"])
+def update_fine_status():
+    print("UPDATE FINE CALLED *******")
+    json_data = request.get_json()
+    print(json_data)
+    fine_id = json_data['fine_id']
+    fine_status = json_data['fine_status']
+    reason = json_data['reason']
+    print(fine_id, fine_status, reason)
+
+    query1 = """
+     MATCH (f: Fine{fine_id:$fine_id})
+     WHERE f.reason = $reason
+     SET f.fine_status = $fine_status
+     RETURN f.fine_status as fine_status
+    """
+    map = {"fine_id": fine_id,
+           "fine_status": fine_status,
+           "reason": reason
+           }
+    try:
+        session.run(query1, map)
+        return f"fine: {fine_id} updated, fine status is: {fine_status}"
+    except Exception as e:
+        print(str(e))
+        return str(e)
+

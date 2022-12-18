@@ -135,7 +135,7 @@ def update_user():
             n.search_full_name = $search_full_name,
             n.email = $email,
             n.address = $address,
-            n.dob = $date(dob),
+            n.dob = date($dob),
             n.tel = $tel
     """
     map = {"f_name": f_name,
@@ -169,9 +169,7 @@ def borrow_item():
         days_for_loan = 30
     rel_id = uuid.uuid4()
     date_borrowed = datetime.now()
-    #date_borrowed = get_date.strftime("%d,%m,%Y")
     date_due = datetime.now() + timedelta(days=days_for_loan)
-    #date_due = get_due_date.strftime("%d,%m,%Y")
     overdue = False
     days_overdue = 0
 
@@ -183,7 +181,12 @@ def borrow_item():
     query1 = """
     MATCH (u:User{user_id:$user_id})
     MATCH (n:Item{node_id:$node_id})
-    CREATE (u)-[r:BORROWED { rel_id:$rel_id, date_borrowed:date($date_borrowed), date_due:date($date_due), status:"active", overdue:$overdue }]->(n)
+    CREATE (u)-[r:BORROWED { rel_id:$rel_id, 
+                            date_borrowed:date($date_borrowed), 
+                            date_due:date($date_due), 
+                            status:"active",
+                            days_overdue: $days_overdue, 
+                            overdue:$overdue }]->(n)
     WITH n
     MATCH (n)-[r1:STAMPED_AS]->() DELETE r1
     MERGE (s:Status {type:"On Loan"}) 
@@ -223,7 +226,6 @@ def return_item():
     node_id = json_data['node_id']
     rel_id = uuid.uuid4()
     date_returned = datetime.now()
-    #date_returned = get_date.strftime("%d,%m,%Y")
 
     query1 = """
     MATCH (u:User{user_id:$user_id})
@@ -236,6 +238,7 @@ def return_item():
     MERGE (s:Status {type:"Available"}) 
     MERGE (n)-[r2:STAMPED_AS]->(s)
     """
+
 
     map = {"node_id": node_id,
            "rel_id": str(rel_id),
@@ -269,13 +272,42 @@ def get_user_borrowed_items(user_id):
                     m.type as media,
                     c.type as classification,
                     toString(r.date_borrowed) as date_borrowed,
-                    toString(r.date_due) as due_date
+                    toString(r.date_due) as date_due,
+                    r.overdue as overdue
     """
     map = {"user_id": user_id}
 
     results = session.run(query1, map)
     data = results.data()
     return jsonify(data)
+
+
+@app.route("/getfines/<string:user_id>", methods=["GET"])
+def get_fines(user_id):
+    query1 = """
+     MATCH (u: User{user_id:$user_id})<-[r1:ISSUED_TO]-(f:Fine)-[r2:ISSUED_FOR]->(i)
+        RETURN f.fine_id as fine_id,
+            f.reason as reason,
+            f.fine_status as status,
+            toString(f.date_issued) as date_issued,
+            f.fine_rate as fine_rate,
+            toString(f.item_due_back) as item_due_back,
+            i.title as title,
+            i.author as author,
+            i.node_id as node_id,
+            i.days_for_loan as dfl
+        """
+
+    map = {
+        "user_id": user_id
+    }
+    try:
+        results = session.run(query1, map)
+        data = results.data()
+        return jsonify(data)
+    except Exception as e:
+        print(str(e))
+        return str(e)
 
 
 @app.route("/filtermembers", methods=["POST"])
@@ -379,3 +411,27 @@ def quick_filtered_members(search_request):
     print('PRINT DATA')
     print(data)
     return jsonify(data)
+
+
+@app.route("/memberlostitem", methods=["POST"])
+def member_lost_item():
+    json_data = request.get_json()
+    print(json_data)
+    user_id = json_data['user_id']
+    node_id = json_data['node_id']
+
+    query1 = """
+    MATCH (u:User{user_id:$user_id})-[r3:BORROWED]->(n:Item{node_id:$node_id})
+    SET r3.status = "inactive"
+    RETURN r3.status as status
+    """
+
+    map = {"node_id": node_id,
+           "user_id": user_id
+           }
+    try:
+        session.run(query1, map)
+        return (f"user Id:{user_id} lost item id: {node_id}")
+    except Exception as e:
+        print(str(e))
+        return (str(e))
