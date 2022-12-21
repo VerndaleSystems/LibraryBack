@@ -35,6 +35,7 @@ def create_node():
     print(json_data)
     f_name = json_data['f_name']
     l_name = json_data['l_name']
+    full_name = f_name + '' + l_name
     email = json_data['email']
     address = json_data['address']
     dob = json_data['dob']
@@ -43,18 +44,17 @@ def create_node():
     user_id = uuid.uuid4()
     password = generate_password_hash(json_data['password'])
 
-    #Run first query to check if email exists in database - if it does send back error message
-
     query1 = """
     create (n:User{f_name:$f_name, 
             search_f_name:$search_f_name,
             l_name:$l_name,
             search_l_name:$search_l_name,
+            search_full_name: $search_full_name,
             user_id:$user_id,
             email:$email,
             password:$password,
             address:$address,
-            dob:$date(dob),
+            dob:date($dob),
             tel:$tel,
             id_provided:$id_provided
             })
@@ -63,6 +63,7 @@ def create_node():
            "search_f_name": f_name.lower(),
            "l_name": l_name,
            "search_l_name": l_name.lower(),
+           "search_full_name": full_name.lower(),
            "email": email,
            "address": address,
            "dob": dob,
@@ -75,7 +76,7 @@ def create_node():
         session.run(query1, map)
         return (f"Member created with name: {f_name} {l_name} and node_id: {user_id}")
     except Exception as e:
-        return (str(e))
+        return str(e)
 
 
 @app.route("/getuserdetail/<string:user_id>", methods=["GET"])
@@ -121,7 +122,7 @@ def update_user():
     user_id = json_data['user_id']
     f_name = json_data['f_name']
     l_name = json_data['l_name']
-    full_name = f_name + l_name
+    full_name = f_name + '' + l_name
     email = json_data['email']
     address = json_data['address']
     dob = json_data['dob']
